@@ -1,0 +1,49 @@
+name: Sync release assets
+
+on:
+  # run when triggered by xs repo release, or manually
+  repository_dispatch:
+    types: [release]
+  workflow_dispatch:
+  schedule:
+    # check daily in case dispatch was missed
+    - cron: "0 6 * * *"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch latest release assets
+        run: |
+          RELEASE=$(curl -s https://api.github.com/repos/xs-lang0/xs/releases/latest)
+          TAG=$(echo "$RELEASE" | jq -r '.tag_name')
+          echo "latest release: $TAG"
+
+          # download xs.wasm if available
+          WASM_URL=$(echo "$RELEASE" | jq -r '.assets[] | select(.name=="xs.wasm") | .browser_download_url')
+          if [ -n "$WASM_URL" ] && [ "$WASM_URL" != "null" ]; then
+            echo "downloading xs.wasm..."
+            curl -L -o public/xs.wasm "$WASM_URL"
+            echo "xs.wasm: $(wc -c < public/xs.wasm) bytes"
+          else
+            echo "xs.wasm not found in release $TAG"
+          fi
+
+          # write version file
+          echo "$TAG" > public/version.txt
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "xs-lang0"
+          git config user.email "xslang.090@gmail.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "no changes"
+          else
+            git commit -m "sync assets from $TAG"
+            git push
+          fi
