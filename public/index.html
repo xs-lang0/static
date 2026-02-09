@@ -19,5 +19,18 @@
     console.log(output)
   })()
 &lt;/script&gt;</pre>
+<h3>Pulling remote data through the VFS</h3>
+<p>Raw sockets aren't available under wasi, so <code>net.http_get</code>
+returns null in the browser. Use <code>xs.fetch(url, path)</code> to
+pipe a remote body into the VFS and then read it back from XS:</p>
+<pre>const xs = await loadXS()
+await xs.fetch("https://api.github.com/zen", "zen.txt")
+await xs.run(`import fs; println(fs.read("zen.txt"))`)
+
+// or batch:
+await xs.fetchAll({
+  "data.json":   "https://example.com/data.json",
+  "schema.toml": "https://example.com/schema.toml",
+})</pre>
 </body>
 </html>
