@@ -25,6 +25,22 @@
   var xsReady = null;
   var xsInstance = null;
 
+  // Lazy-load xs-highlight.js so <xs-editor> can syntax-colour on input.
+  // Fire-and-forget; paint() falls back to plain HTML escaping until it lands.
+  (function () {
+    if (typeof window === "undefined") return;
+    if (typeof window.xsHighlight !== "undefined") return;
+    var s = document.createElement("script");
+    s.src = STATIC_BASE + "/xs-highlight.js";
+    s.async = true;
+    s.onload = function () {
+      // repaint any editors that mounted before the script arrived
+      var editors = document.querySelectorAll("xs-editor");
+      editors.forEach(function (e) { if (e._repaint) e._repaint(); });
+    };
+    document.head.appendChild(s);
+  })();
+
   function ensureXS() {
     if (xsReady) return xsReady;
     xsReady = new Promise(function (resolve, reject) {
@@ -102,16 +118,39 @@
     "}",
     ".xs-editor-run:hover { opacity: 0.85; }",
     ".xs-editor-run:disabled { opacity: 0.5; cursor: wait; }",
-    ".xs-editor-input {",
-    "  display: block; width: 100%; box-sizing: border-box;",
-    "  padding: 12px; margin: 0; border: none; outline: none; resize: vertical;",
+    ".xs-editor-stack {",
+    "  position: relative;",
+    "  background: var(--xs-bg, #1e1e2e);",
+    "}",
+    ".xs-editor-input, .xs-editor-hl {",
+    "  display: block; box-sizing: border-box; width: 100%;",
+    "  padding: 12px; margin: 0; border: none;",
     "  font-family: var(--xs-font, monospace);",
     "  font-size: var(--xs-font-size, 14px);",
     "  line-height: 1.5;",
-    "  background: var(--xs-bg, #1e1e2e);",
-    "  color: var(--xs-color, #cdd6f4);",
-    "  tab-size: 2;",
+    "  tab-size: 2; white-space: pre; word-break: normal;",
     "}",
+    ".xs-editor-hl {",
+    "  position: absolute; inset: 0;",
+    "  pointer-events: none; overflow: auto;",
+    "  color: var(--xs-color, #cdd6f4);",
+    "}",
+    ".xs-editor-input {",
+    "  position: relative;",
+    "  outline: none; resize: vertical;",
+    "  color: transparent;",
+    "  background: transparent;",
+    "  caret-color: var(--xs-caret, #cdd6f4);",
+    "  min-height: 100%;",
+    "}",
+    ".xs-editor-keyword  { color: var(--xs-kw-color, #cba6f7); font-weight: 600; }",
+    ".xs-editor-string   { color: var(--xs-str-color, #a6e3a1); }",
+    ".xs-editor-number   { color: var(--xs-num-color, #fab387); }",
+    ".xs-editor-comment  { color: var(--xs-comment-color, #6c7086); font-style: italic; }",
+    ".xs-editor-type     { color: var(--xs-type-color, #f9e2af); }",
+    ".xs-editor-builtin  { color: var(--xs-builtin-color, #89dceb); }",
+    ".xs-editor-constant { color: var(--xs-const-color, #f38ba8); }",
+    ".xs-editor-operator { color: var(--xs-op-color, #89b4fa); }",
     ".xs-editor-output-wrap {",
     "  border-top: var(--xs-border, 1px solid #333);",
     "  background: var(--xs-output-bg, #11111b);",
@@ -173,7 +212,18 @@
       toolbar.appendChild(titleEl);
       toolbar.appendChild(runBtn);
 
-      // editor
+      // editor: highlight overlay under a transparent textarea
+      var stack = document.createElement("div");
+      stack.className = "xs-editor-stack";
+      stack.setAttribute("part", "stack");
+
+      var hl = document.createElement("pre");
+      hl.className = "xs-editor-hl";
+      hl.setAttribute("aria-hidden", "true");
+      hl.setAttribute("part", "highlight");
+      var hlCode = document.createElement("code");
+      hl.appendChild(hlCode);
+
       var textarea = document.createElement("textarea");
       textarea.className = "xs-editor-input";
       textarea.setAttribute("part", "input");
@@ -184,6 +234,27 @@
       textarea.rows = rows;
       textarea.value = code;
       if (readonly) textarea.readOnly = true;
+
+      // Map the highlighter's .xs-{cls} spans into scoped .xs-editor-{cls}
+      // so our shadow DOM styles can reach them.
+      function paint() {
+        var raw = (typeof xsHighlight !== "undefined")
+          ? xsHighlight.highlight(textarea.value)
+          : escapeHtml(textarea.value);
+        hlCode.innerHTML = raw.replace(/class="xs-/g, 'class="xs-editor-') +
+          (textarea.value.endsWith("\n") ? " " : "");
+      }
+      function escapeHtml(s) {
+        return s.replace(/[&<>]/g, function (c) {
+          return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c];
+        });
+      }
+      textarea.addEventListener("input", paint);
+      textarea.addEventListener("scroll", function () {
+        hl.scrollTop  = textarea.scrollTop;
+        hl.scrollLeft = textarea.scrollLeft;
+      });
+      paint();
 
       // tab key support
       textarea.addEventListener("keydown", function (e) {
@@ -218,8 +289,11 @@
       outputWrap.appendChild(outputLabel);
       outputWrap.appendChild(output);
 
+      stack.appendChild(hl);
+      stack.appendChild(textarea);
+
       wrap.appendChild(toolbar);
-      wrap.appendChild(textarea);
+      wrap.appendChild(stack);
       wrap.appendChild(outputWrap);
 
       this._shadow.appendChild(style);
@@ -251,8 +325,9 @@
       // public API
       this.run = function () { runBtn.click(); };
       this.getCode = function () { return textarea.value; };
-      this.setCode = function (c) { textarea.value = c; };
+      this.setCode = function (c) { textarea.value = c; paint(); };
       this.getOutput = function () { return output.textContent; };
+      this._repaint = paint;
 
       if (runOnLoad) {
         requestAnimationFrame(function () { runBtn.click(); });
