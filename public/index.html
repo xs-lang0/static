@@ -6,8 +6,12 @@
 <p>Static assets for the <a href="https://xslang.org">XS programming language</a>.</p>
 <h2>Files</h2>
 <ul>
-  <li><a href="/xs.js">xs.js</a> - Browser SDK</li>
+  <li><a href="/xs.js">xs.js</a> - Browser SDK (run XS in wasm)</li>
   <li><a href="/xs.wasm">xs.wasm</a> - XS interpreter (WebAssembly)</li>
+  <li><a href="/xs-embed.js">xs-embed.js</a> - &lt;xs-editor&gt; / &lt;xs-code&gt; web components</li>
+  <li><a href="/xs-highlight.js">xs-highlight.js</a> - syntax highlighter (regex, ~5 KB)</li>
+  <li><a href="/tree-sitter-xs.wasm">tree-sitter-xs.wasm</a> - XS tree-sitter grammar (optional)</li>
+  <li><a href="/web-tree-sitter.js">web-tree-sitter.js</a>, <a href="/web-tree-sitter.wasm">.wasm</a> - tree-sitter runtime (optional)</li>
   <li><a href="/version.txt">version.txt</a> - Current version</li>
 </ul>
 <h2>Usage</h2>
@@ -19,6 +23,17 @@
     console.log(output)
   })()
 &lt;/script&gt;</pre>
+<h3>Syntax highlighting</h3>
+<p>The default highlighter is a small regex tokeniser. For AST-aware
+highlighting (and the groundwork for editor tooling) call
+<code>xsHighlight.useTreeSitter()</code>, which loads the 350 KB XS
+grammar plus the 200 KB tree-sitter runtime on demand:</p>
+<pre>&lt;script src="https://static.xslang.org/xs-highlight.js"&gt;&lt;/script&gt;
+&lt;script&gt;
+  await xsHighlight.useTreeSitter({ baseUrl: "https://static.xslang.org" })
+  const html = xsHighlight.highlight(xsCode)
+&lt;/script&gt;</pre>
+
 <h3>Pulling remote data through the VFS</h3>
 <p>Raw sockets aren't available under wasi, so <code>net.http_get</code>
 returns null in the browser. Use <code>xs.fetch(url, path)</code> to
