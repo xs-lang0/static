@@ -23,14 +23,25 @@ jobs:
           TAG=$(echo "$RELEASE" | jq -r '.tag_name')
           echo "latest release: $TAG"
 
-          # download xs.wasm if available
-          WASM_URL=$(echo "$RELEASE" | jq -r '.assets[] | select(.name=="xs.wasm") | .browser_download_url')
-          if [ -n "$WASM_URL" ] && [ "$WASM_URL" != "null" ]; then
-            echo "downloading xs.wasm..."
-            curl -L -o public/xs.wasm "$WASM_URL"
-            echo "xs.wasm: $(wc -c < public/xs.wasm) bytes"
+          # Prefer xs-browser.wasm when the release ships one - it's the
+          # smaller build with TLS / http_server / x509 / RSA / EC stripped
+          # out, which is what every browser caller actually wants. Fall
+          # back to the full xs.wasm for older releases that didn't ship
+          # a separate browser build.
+          BROWSER_URL=$(echo "$RELEASE" | jq -r '.assets[] | select(.name=="xs-browser.wasm") | .browser_download_url')
+          if [ -n "$BROWSER_URL" ] && [ "$BROWSER_URL" != "null" ]; then
+            echo "downloading xs-browser.wasm..."
+            curl -L -o public/xs.wasm "$BROWSER_URL"
+            echo "xs.wasm (from browser build): $(wc -c < public/xs.wasm) bytes"
           else
-            echo "xs.wasm not found in release $TAG"
+            WASM_URL=$(echo "$RELEASE" | jq -r '.assets[] | select(.name=="xs.wasm") | .browser_download_url')
+            if [ -n "$WASM_URL" ] && [ "$WASM_URL" != "null" ]; then
+              echo "downloading xs.wasm (full)..."
+              curl -L -o public/xs.wasm "$WASM_URL"
+              echo "xs.wasm: $(wc -c < public/xs.wasm) bytes"
+            else
+              echo "no wasm asset found in release $TAG"
+            fi
           fi
 
           # write version file
