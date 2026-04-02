@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>XS Embed SDK Test</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 800px;
+      margin: 40px auto;
+      padding: 0 20px;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      line-height: 1.6;
+    }
+    h1 { color: #a6e3a1; }
+    h2 { color: #89b4fa; margin-top: 40px; }
+    code { background: #1e1e2e; padding: 2px 6px; border-radius: 3px; }
+    hr { border: none; border-top: 1px solid #333; margin: 40px 0; }
+
+    /* custom styling for the editor */
+    .custom-editor {
+      --xs-bg: #1a1b26;
+      --xs-color: #c0caf5;
+      --xs-toolbar-bg: #16161e;
+      --xs-btn-bg: #7aa2f7;
+      --xs-btn-color: #1a1b26;
+      --xs-border: 1px solid #292e42;
+      --xs-radius: 8px;
+      --xs-output-bg: #16161e;
+      --xs-output-color: #9aa5ce;
+      --xs-font-size: 13px;
+    }
+
+    /* markdown-style code blocks for data-auto test */
+    pre {
+      background: #1e1e2e;
+      padding: 12px;
+      border-radius: 6px;
+      overflow-x: auto;
+    }
+    pre code {
+      background: none;
+      padding: 0;
+      font-size: 14px;
+      color: #cdd6f4;
+    }
+  </style>
+</head>
+<body>
+
+<h1>XS Embed SDK - Test Page</h1>
+<p>Testing all three embedding modes plus auto-enhance.</p>
+
+<hr>
+
+<h2>1. &lt;xs-editor&gt; - Default</h2>
+<p>Interactive editor with run button. Click "Run" or press Ctrl+Enter.</p>
+
+<xs-editor title="Hello World">
+println("hello from XS!")
+
+for i in 1..5 {
+  println("count: {i}")
+}
+</xs-editor>
+
+<hr>
+
+<h2>2. &lt;xs-editor&gt; - Custom styled</h2>
+<p>Same component, different theme via CSS variables.</p>
+
+<xs-editor class="custom-editor" title="Pattern Matching">
+fn describe(val) {
+  match val {
+    0          => "zero"
+    n if n > 0 => "positive: {n}"
+    _          => "negative"
+  }
+}
+
+println(describe(42))
+println(describe(0))
+println(describe(-7))
+</xs-editor>
+
+<hr>
+
+<h2>3. &lt;xs-editor&gt; - Run on load, readonly</h2>
+
+<xs-editor title="Auto-run demo" run-on-load readonly>
+let xs = "XS"
+println("{xs} runs in the browser!")
+</xs-editor>
+
+<hr>
+
+<h2>4. &lt;xs-code&gt; - Auto-executing</h2>
+<p>Shows the code and runs it automatically.</p>
+
+<xs-code>
+fn fib(n) {
+  if n <= 1 { return n }
+  fib(n - 1) + fib(n - 2)
+}
+
+for i in 0..10 {
+  println("fib({i}) = {fib(i)}")
+}
+</xs-code>
+
+<hr>
+
+<h2>5. &lt;script type="text/xs"&gt; - Inline execution</h2>
+<p>Output appears right below:</p>
+
+<script type="text/xs">
+let items = ["one", "two", "three"]
+for item in items {
+  println("- {item}")
+}
+println("done!")
+</script>
+
+<hr>
+
+<h2>6. Auto-enhanced code blocks (data-auto)</h2>
+<p>These are regular <code>&lt;pre&gt;&lt;code class="language-xs"&gt;</code> blocks. Hover to see the "Run" button.</p>
+
+<pre><code class="language-xs">fn* count_up(start) {
+  var n = start
+  loop {
+    yield n
+    n = n + 1
+  }
+}
+
+for n in count_up(1) {
+  if n > 5 { break }
+  println(n)
+}</code></pre>
+
+<pre><code class="language-xs">let msg = "hover over me and click Run!"
+println(msg)</code></pre>
+
+<hr>
+<p>End of test page.</p>
+
+<script src="xs-embed.js" data-auto></script>
+</body>
+</html>
