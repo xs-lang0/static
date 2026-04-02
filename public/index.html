@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>XS Static Assets</title></head>
+<body>
+<h1>static.xslang.org</h1>
+<p>Static assets for the <a href="https://xslang.org">XS programming language</a>.</p>
+<h2>Files</h2>
+<ul>
+  <li><a href="/xs.js">xs.js</a> - Browser SDK</li>
+  <li><a href="/xs.wasm">xs.wasm</a> - XS interpreter (WebAssembly)</li>
+  <li><a href="/version.txt">version.txt</a> - Current version</li>
+</ul>
+<h2>Usage</h2>
+<pre>&lt;script src="https://static.xslang.org/xs.js"&gt;&lt;/script&gt;
+&lt;script&gt;
+  (async () =&gt; {
+    const xs = await loadXS()
+    const output = await xs.run(`println("hello world")`)
+    console.log(output)
+  })()
+&lt;/script&gt;</pre>
+</body>
+</html>
