@@ -365,11 +365,32 @@
     // instantiate
     var instance, memory;
 
+    // sleep implementation: try Atomics.wait (no CPU burn), fall back to busy-wait
+    var _sleepBuf = null;
+    try { _sleepBuf = new Int32Array(new SharedArrayBuffer(4)); } catch(e) {}
+
+    function _sleepMs(ms) {
+      if (ms <= 0) return;
+      if (_sleepBuf) {
+        Atomics.wait(_sleepBuf, 0, 0, ms);
+      } else {
+        var end = performance.now() + ms;
+        while (performance.now() < end) {}
+      }
+    }
+
     function buildImports(wasiObj) {
-      var imports = { wasi_snapshot_preview1: wasiObj };
+      var imports = {
+        wasi_snapshot_preview1: wasiObj,
+        env: { __xs_sleep_ms: _sleepMs },
+      };
       if (config.imports) {
         for (var k in config.imports) {
-          imports[k] = config.imports[k];
+          if (k === "env") {
+            for (var ek in config.imports[k]) imports.env[ek] = config.imports[k][ek];
+          } else {
+            imports[k] = config.imports[k];
+          }
         }
       }
       return imports;
