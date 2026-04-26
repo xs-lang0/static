@@ -22,6 +22,7 @@ jobs:
           RELEASE=$(curl -s https://api.github.com/repos/xs-lang0/xs/releases/latest)
           TAG=$(echo "$RELEASE" | jq -r '.tag_name')
           echo "latest release: $TAG"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
 
           # Prefer xs-browser.wasm when the release ships one - it's the
           # smaller build with TLS / http_server / x509 / RSA / EC stripped
