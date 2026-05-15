@@ -711,8 +711,11 @@ function blockingStdin() {
   const n = Atomics.load(stdinFlag, 0);
   Atomics.store(stdinFlag, 0, 0);
   if (n <= 0) return "";
-  const text = new TextDecoder().decode(stdinBytes.subarray(0, n));
-  return text;
+  // Copy out of the SAB-backed view first - TextDecoder.decode rejects
+  // views over a SharedArrayBuffer in current Chrome / Firefox.
+  const copy = new Uint8Array(n);
+  copy.set(stdinBytes.subarray(0, n));
+  return new TextDecoder().decode(copy);
 }
 
 class XSExit { constructor(code) { this.code = code; } }
