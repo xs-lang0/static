@@ -773,8 +773,11 @@ function runWasi(argv, config) {
     fd_read(fd, iovPtr, iovLen, nreadPtr) {
       let total = 0;
       if (fd === 0) {
-        if (stdoutBuf) { onStdout(stdoutBuf); stdoutBuf = ""; }
-        if (stderrBuf) { onStderr(stderrBuf); stderrBuf = ""; }
+        // Pre-stdin flush: surface any partial line so the prompt text shows
+        // up before we block. Marked separately so callers can render it on
+        // the same line as the upcoming input.
+        if (stdoutBuf) { self.postMessage({ cmd: "stdout-partial", text: stdoutBuf }); stdoutBuf = ""; }
+        if (stderrBuf) { self.postMessage({ cmd: "stderr-partial", text: stderrBuf }); stderrBuf = ""; }
         let input = stdinRem || blockingStdin();
         if (input && !input.endsWith("\\n")) input += "\\n";
         if (input) {
@@ -955,6 +958,16 @@ self.onmessage = async (ev) => {
       const d = ev.data;
       if (d.cmd === "stdout") { (config.stdout || (() => {}))(d.line); return; }
       if (d.cmd === "stderr") { (config.stderr || (() => {}))(d.line); return; }
+      if (d.cmd === "stdout-partial") {
+        if (config.stdoutPartial) config.stdoutPartial(d.text);
+        else if (config.stdout) config.stdout(d.text);
+        return;
+      }
+      if (d.cmd === "stderr-partial") {
+        if (config.stderrPartial) config.stderrPartial(d.text);
+        else if (config.stderr) config.stderr(d.text);
+        return;
+      }
       if (d.cmd === "stdin-req") { onStdinReq(); return; }
       const entry = pending.get(d.id);
       if (!entry) return;
