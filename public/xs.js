@@ -427,9 +427,38 @@
       path_remove_directory() { return 52; },
       path_readlink() { return 52; },
       fd_readdir() { return 52; },
-      poll_oneoff() { return 52; },
+      poll_oneoff(inPtr, outPtr, nsubs, neventsPtr) {
+        const v = view(); const m = mem();
+        const stash = (text) => {
+          if (!text) return;
+          if (!text.endsWith("\n")) text += "\n";
+          stdinRem = stdinRem ? stdinRem + text : text;
+        };
+        const blocking = () => {
+          if (stdinRem) return "";
+          if (stoutCtxFlush()) {/* no-op */}
+          if (stdinCtx && stdinCtx.blockingRead) return stdinCtx.blockingRead();
+          if (onStdin) {
+            const r = onStdin();
+            if (r && typeof r.then === "function") return "";
+            return r || "";
+          }
+          return "";
+        };
+        return pollOneoff(v, m, inPtr, outPtr, nsubs, neventsPtr, {
+          blockingStdin: blocking,
+          stashStdin: stash,
+          sleepMs: _sleepMs,
+        });
+      },
       sched_yield() { return 0; },
     };
+
+    function stoutCtxFlush() {
+      if (stdoutBuf) { onStdout(stdoutBuf); stdoutBuf = ""; }
+      if (stderrBuf) { onStderr(stderrBuf); stderrBuf = ""; }
+      return true;
+    }
 
     if (config.wasi) {
       for (const [k, fn] of Object.entries(config.wasi)) {
@@ -476,6 +505,117 @@
     if (ms <= 0) return;
     if (_sleepBuf) Atomics.wait(_sleepBuf, 0, 0, ms);
     else { const end = performance.now() + ms; while (performance.now() < end) {} }
+  }
+
+  // ---- poll_oneoff helpers ----
+  //
+  // wasi subscription_t (48 bytes):
+  //   u64 userdata          @ 0
+  //   u8  tag               @ 8     (0=clock, 1=fd_read, 2=fd_write)
+  //   --- 7 bytes pad ---
+  //   union body starts     @ 16
+  //     clock:  u32 id @16, u64 timeout_ns @24, u64 precision @32, u16 flags @40
+  //     fd_rw:  u32 fd @16
+  //
+  // event_t (32 bytes):
+  //   u64 userdata          @ 0
+  //   u16 errno             @ 8
+  //   u8  type              @ 10    (0=clock, 1=fd_read, 2=fd_write)
+  //   --- pad to 16 ---
+  //   fd_readwrite payload starts @ 16
+  //     u64 nbytes @16, u16 flags @24
+  //
+  // Walks the subscription array, fires fd_write / non-stdin fd_read events
+  // immediately (regular files in this VFS are always ready), routes a stdin
+  // fd_read through the supplied blocking-stdin callback, and sleeps for the
+  // shortest clock subscription. Returns 0 on success and writes nevents.
+  function pollOneoff(view, mem, inPtr, outPtr, nsubs, neventsPtr, ctx) {
+    let written = 0;
+    let minSleepMs = Infinity;
+    let stdinSub = -1;          // index of an fd_read on fd 0, if any
+    const subs = [];
+
+    for (let i = 0; i < nsubs; i++) {
+      const off = inPtr + i * 48;
+      const ud = view.getBigUint64(off, true);
+      const tag = mem[off + 8];
+      subs.push({ off, ud, tag });
+
+      if (tag === 0) {
+        // Clock. Spec stores id as u32 but only 1 byte is meaningful for our
+        // purposes; treat the timeout as nanoseconds and convert.
+        const id = view.getUint32(off + 16, true);
+        const timeoutNs = view.getBigUint64(off + 24, true);
+        const flags = view.getUint16(off + 40, true);
+        let waitMs;
+        if (flags & 1) {
+          // ABSTIME against the same clock we report from clock_time_get.
+          // Both monotonic and realtime are simulated from performance.now()
+          // here so subtract current time.
+          const now = BigInt(Math.round(performance.now() * 1e6));
+          waitMs = Number(timeoutNs > now ? (timeoutNs - now) : 0n) / 1e6;
+        } else {
+          waitMs = Number(timeoutNs) / 1e6;
+        }
+        if (waitMs < minSleepMs) minSleepMs = waitMs;
+        subs[i].clockId = id;
+      } else if (tag === 1) {
+        const fd = view.getUint32(off + 16, true);
+        subs[i].fd = fd;
+        if (fd === 0) stdinSub = i;
+      } else if (tag === 2) {
+        subs[i].fd = view.getUint32(off + 16, true);
+      }
+    }
+
+    function emit(sub, type, err, nbytes) {
+      const eo = outPtr + written * 32;
+      for (let k = 0; k < 32; k++) mem[eo + k] = 0;
+      view.setBigUint64(eo, sub.ud, true);
+      view.setUint16(eo + 8, err, true);
+      mem[eo + 10] = type;
+      if (type === 1 || type === 2) {
+        view.setBigUint64(eo + 16, BigInt(nbytes || 0), true);
+        view.setUint16(eo + 24, 0, true);
+      }
+      written++;
+    }
+
+    // Non-stdin fd events fire immediately; regular files in our VFS never
+    // block, and fd 1/2 are always writable.
+    let immediate = false;
+    for (const s of subs) {
+      if (s.tag === 1 && s.fd !== 0) { emit(s, 1, 0, 0); immediate = true; }
+      else if (s.tag === 2)          { emit(s, 2, 0, 0); immediate = true; }
+    }
+
+    if (stdinSub >= 0) {
+      // Stdin fd_read. Pull a line via the blocking callback (worker-side
+      // blocks on Atomics.wait; main-thread sync stdin returns immediately).
+      // Report the byte count so wasi-libc knows there's data ready.
+      const text = ctx.blockingStdin ? ctx.blockingStdin() : "";
+      const n = text ? new TextEncoder().encode(text).length : 0;
+      ctx.stashStdin && ctx.stashStdin(text);
+      emit(subs[stdinSub], 1, 0, n);
+      view.setUint32(neventsPtr, written, true);
+      return 0;
+    }
+
+    if (immediate) {
+      view.setUint32(neventsPtr, written, true);
+      return 0;
+    }
+
+    // Pure clock wait. Sleep for the shortest deadline, then mark every clock
+    // subscription as fired.
+    if (minSleepMs === Infinity) minSleepMs = 0;
+    if (minSleepMs > 0) {
+      if (ctx.sleepMs) ctx.sleepMs(minSleepMs);
+      else _sleepMs(minSleepMs);
+    }
+    for (const s of subs) if (s.tag === 0) emit(s, 0, 0, 0);
+    view.setUint32(neventsPtr, written, true);
+    return 0;
   }
 
   // ---- Main-thread loader ----
@@ -692,15 +832,19 @@ function buildVFS() {
 //   [0]: int32 flag (0 = empty, >0 = ready with N bytes, -1 = closed)
 //   [4..]: utf-8 bytes
 let stdinSAB = null, stdinFlag = null, stdinBytes = null;
+// Dedicated buffer for clock waits so sleep doesn't fight the stdin flag.
+let sleepSAB = null, sleepFlag = null;
 
 function initSAB() {
   try {
     stdinSAB = new SharedArrayBuffer(4 + 65536);
     stdinFlag = new Int32Array(stdinSAB, 0, 1);
     stdinBytes = new Uint8Array(stdinSAB, 4);
+    sleepSAB = new SharedArrayBuffer(4);
+    sleepFlag = new Int32Array(sleepSAB, 0, 1);
     return true;
   } catch (e) {
-    stdinSAB = null; return false;
+    stdinSAB = null; sleepSAB = null; return false;
   }
 }
 
@@ -853,14 +997,78 @@ function runWasi(argv, config) {
     path_remove_directory() { return 52; },
     path_readlink() { return 52; },
     fd_readdir() { return 52; },
-    poll_oneoff() { return 52; },
+    poll_oneoff(inPtr, outPtr, nsubs, neventsPtr) {
+      let written = 0;
+      let minSleepMs = Infinity;
+      let stdinSub = -1;
+      const subs = [];
+      const dv = v(), mb = m();
+      for (let i = 0; i < nsubs; i++) {
+        const o = inPtr + i * 48;
+        const ud = dv.getBigUint64(o, true);
+        const tag = mb[o + 8];
+        const s = { o, ud, tag };
+        if (tag === 0) {
+          const ns = dv.getBigUint64(o + 24, true);
+          const fl = dv.getUint16(o + 40, true);
+          let waitMs;
+          if (fl & 1) {
+            const now = BigInt(Math.round(performance.now() * 1e6));
+            waitMs = Number(ns > now ? (ns - now) : 0n) / 1e6;
+          } else {
+            waitMs = Number(ns) / 1e6;
+          }
+          if (waitMs < minSleepMs) minSleepMs = waitMs;
+        } else if (tag === 1) {
+          const fd = dv.getUint32(o + 16, true);
+          s.fd = fd;
+          if (fd === 0) stdinSub = i;
+        } else if (tag === 2) {
+          s.fd = dv.getUint32(o + 16, true);
+        }
+        subs.push(s);
+      }
+      function emit(s, type, err, nbytes) {
+        const eo = outPtr + written * 32;
+        for (let k = 0; k < 32; k++) mb[eo + k] = 0;
+        dv.setBigUint64(eo, s.ud, true);
+        dv.setUint16(eo + 8, err, true);
+        mb[eo + 10] = type;
+        if (type === 1 || type === 2) {
+          dv.setBigUint64(eo + 16, BigInt(nbytes || 0), true);
+          dv.setUint16(eo + 24, 0, true);
+        }
+        written++;
+      }
+      let immediate = false;
+      for (const s of subs) {
+        if (s.tag === 1 && s.fd !== 0) { emit(s, 1, 0, 0); immediate = true; }
+        else if (s.tag === 2)          { emit(s, 2, 0, 0); immediate = true; }
+      }
+      if (stdinSub >= 0) {
+        if (stdoutBuf) { self.postMessage({ cmd: "stdout-partial", text: stdoutBuf }); stdoutBuf = ""; }
+        if (stderrBuf) { self.postMessage({ cmd: "stderr-partial", text: stderrBuf }); stderrBuf = ""; }
+        const text = blockingStdin();
+        const withNl = text && !text.endsWith("\\n") ? text + "\\n" : text;
+        if (withNl) stdinRem = stdinRem ? stdinRem + withNl : withNl;
+        const n = withNl ? new TextEncoder().encode(withNl).length : 0;
+        emit(subs[stdinSub], 1, 0, n);
+        dv.setUint32(neventsPtr, written, true);
+        return 0;
+      }
+      if (immediate) { dv.setUint32(neventsPtr, written, true); return 0; }
+      if (minSleepMs === Infinity) minSleepMs = 0;
+      if (minSleepMs > 0) sleepMs(minSleepMs);
+      for (const s of subs) if (s.tag === 0) emit(s, 0, 0, 0);
+      dv.setUint32(neventsPtr, written, true);
+      return 0;
+    },
     sched_yield() { return 0; },
   };
 
-  const sleepBuf = stdinSAB ? stdinFlag : null;
   function sleepMs(ms) {
     if (ms <= 0) return;
-    if (sleepBuf) Atomics.wait(sleepBuf, 0, 0, ms);
+    if (sleepFlag) Atomics.wait(sleepFlag, 0, 0, ms);
     else { const end = performance.now() + ms; while (performance.now() < end) {} }
   }
 
@@ -925,6 +1133,8 @@ self.onmessage = async (ev) => {
           if (sharedBuffer) {
             stdinFlag = new Int32Array(sharedBuffer, 0, 1);
             stdinBytes = new Uint8Array(sharedBuffer, 4);
+          } else if (typeof console !== "undefined") {
+            console.warn("xs.js: SharedArrayBuffer unavailable; sleep / input / blocking primitives will not work. Ensure cross-origin isolation (COOP/COEP).");
           }
           worker.removeEventListener("message", onMsg);
           resolve();
