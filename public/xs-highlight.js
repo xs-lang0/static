@@ -121,7 +121,142 @@
     document.head.appendChild(s);
   }
 
-  const xsHighlight = { highlight, injectCSS, KEYWORDS, TYPES, BUILTINS, CONSTANTS };
+  // ---- Optional: tree-sitter backend ----
+  //
+  // xsHighlight.useTreeSitter({ baseUrl }) swaps the regex tokenizer for a
+  // tree-sitter one. The parser file is ~350kb and the runtime ~200kb, so
+  // this only runs when the consumer opts in (bigger programs, better
+  // nesting-aware colours, future editor tooling).
+  //
+  // After the promise resolves, xsHighlight.highlight(src) returns an
+  // AST-walked rendering; if anything goes wrong loading, we leave the
+  // regex version in place.
+
+  let regexHighlight = highlight;
+  let tsReady = null;
+
+  function walkTS(tree, source) {
+    const cursor = tree.walk();
+    const out = [];
+    let pos = 0;
+
+    function classifyNode(nodeType) {
+      // map tree-sitter node types to our xs-* classes
+      switch (nodeType) {
+        case "line_comment":
+        case "block_comment":
+          return "comment";
+        case "string_literal":
+        case "char_literal":
+          return "string";
+        case "number_literal":
+        case "universal_literal":
+          return "number";
+        case "boolean_literal":
+        case "null_literal":
+          return "constant";
+        case "primitive_type":
+        case "type_identifier":
+          return "type";
+        case "self_expression":
+          return "constant";
+        default: return null;
+      }
+    }
+
+    // Keywords the grammar matches as anonymous terminal nodes.
+    const KEYWORD_TEXT = new Set([
+      "fn", "fn*", "let", "var", "const",
+      "struct", "enum", "trait", "impl", "class", "type", "effect", "tag",
+      "import", "export", "from", "use", "module", "as", "plugin",
+      "if", "elif", "else", "match", "when", "while", "for", "in", "loop",
+      "return", "break", "continue", "yield",
+      "try", "catch", "finally", "throw", "defer",
+      "async", "await", "spawn", "nursery", "actor",
+      "perform", "handle", "resume",
+      "pub", "mut", "static", "inline", "unsafe", "where",
+      "and", "or", "not", "is",
+    ]);
+
+    function visit() {
+      const node = cursor.currentNode;
+      const start = node.startIndex;
+      const end = node.endIndex;
+      const cls = classifyNode(node.type);
+
+      // Anonymous keyword tokens (grammar's 'if', 'fn', ...) show up as
+      // nodes with isNamed=false whose text is in KEYWORD_TEXT.
+      let kwCls = null;
+      if (!node.isNamed && KEYWORD_TEXT.has(node.type)) kwCls = "keyword";
+
+      if (cls || kwCls) {
+        if (start > pos) out.push({ text: source.slice(pos, start), cls: null });
+        out.push({ text: source.slice(start, end), cls: cls || kwCls });
+        pos = end;
+        return; // don't descend
+      }
+
+      if (cursor.gotoFirstChild()) {
+        do { visit(); } while (cursor.gotoNextSibling());
+        cursor.gotoParent();
+      }
+    }
+    visit();
+    if (pos < source.length) out.push({ text: source.slice(pos), cls: null });
+
+    let html = "";
+    for (const t of out) {
+      const esc = escapeHTML(t.text);
+      html += t.cls ? `<span class="xs-${t.cls}">${esc}</span>` : esc;
+    }
+    return html;
+  }
+
+  function useTreeSitter(opts) {
+    opts = opts || {};
+    const baseUrl = opts.baseUrl || "";
+    if (tsReady) return tsReady;
+
+    tsReady = (async () => {
+      // Pull in web-tree-sitter as an ES module
+      const mod = await import(baseUrl + "/web-tree-sitter.js");
+      const Parser = mod.Parser || mod.default || mod;
+      await Parser.init({
+        locateFile: (name) => baseUrl + "/" + name,
+      });
+      const Lang = mod.Language || Parser.Language;
+      const lang = await Lang.load(baseUrl + "/tree-sitter-xs.wasm");
+      const parser = new Parser();
+      parser.setLanguage(lang);
+
+      // swap out highlight()
+      xsHighlight.highlight = (source) => {
+        try {
+          const tree = parser.parse(source);
+          if (!tree) return regexHighlight(source);
+          const html = walkTS(tree, source);
+          tree.delete();
+          return html;
+        } catch (e) {
+          return regexHighlight(source);
+        }
+      };
+      return true;
+    })().catch((err) => {
+      console.warn("tree-sitter load failed, using regex highlighter", err);
+      tsReady = null;
+      return false;
+    });
+
+    return tsReady;
+  }
+
+  const xsHighlight = {
+    highlight,
+    injectCSS,
+    useTreeSitter,
+    KEYWORDS, TYPES, BUILTINS, CONSTANTS,
+  };
   if (typeof window !== "undefined") window.xsHighlight = xsHighlight;
   if (typeof globalThis !== "undefined") globalThis.xsHighlight = xsHighlight;
   if (typeof module !== "undefined" && module.exports) module.exports = xsHighlight;
