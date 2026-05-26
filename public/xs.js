@@ -466,6 +466,31 @@
       listFiles() { return vfs.listFiles(); },
       deleteFile(path) { return vfs.deleteFile(path); },
 
+      // network -> VFS. Browser-side uses fetch(); the fetched body lands
+      // in the VFS at `path`, so XS code reads it back through fs.read().
+      // Raw POSIX sockets under WASI don't work, so this is the realistic
+      // path for pulling remote data into a wasm-hosted xs.
+      async fetch(url, path, opts) {
+        opts = opts || {};
+        var resp = await fetch(url, opts);
+        if (!resp.ok) throw new Error("fetch " + url + ": " + resp.status);
+        var buf = new Uint8Array(await resp.arrayBuffer());
+        vfs.writeFile(path, buf);
+        return { status: resp.status, size: buf.length, headers: resp.headers };
+      },
+
+      // parallel version: takes a {path: url} map or array of {url, path}
+      async fetchAll(entries) {
+        var items;
+        if (Array.isArray(entries)) items = entries;
+        else items = Object.keys(entries).map(function(p) {
+          return { path: p, url: entries[p] };
+        });
+        return Promise.all(items.map(function(e) {
+          return xs.fetch(e.url, e.path, e.opts);
+        }));
+      },
+
       // reset to fresh state
       async reset(clearFs) {
         if (clearFs !== false && vfs instanceof VFS) {
